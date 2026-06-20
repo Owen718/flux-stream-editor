@@ -226,6 +226,43 @@
         <div class="tag">Output</div>
       </div>
     </section>
+
+    <section class="card controls">
+      <h1 style="font-size: clamp(17px, 2vw, 22px);">Video Upload (style-consistent edit)</h1>
+      <div class="sub">
+        Upload a video; every frame is edited with the same prompt and seed for
+        consistent style, then muxed back to MP4 at the source FPS. Synchronous
+        endpoint — keep videos short and your browser tab open.
+      </div>
+      <div class="row" style="grid-template-columns: 1fr;">
+        <input id="video-prompt" type="text" value="Convert this video into a cinematic anime illustration with clean lines and rich color." placeholder="Prompt applied to every frame..." />
+      </div>
+      <div class="row" id="video-row-controls" style="grid-template-columns: 1fr 140px 140px 140px;">
+        <input id="video-file" type="file" accept="video/mp4,video/quicktime,video/x-matroska,video/webm,video/avi,video/x-msvideo" />
+        <input id="video-seed" type="number" value="42" step="1" title="Same seed is used for every frame." />
+        <button id="video-submit-btn">Edit Video</button>
+        <button id="video-cancel-btn" disabled>Cancel</button>
+      </div>
+      <div class="status" id="video-status">Pick a video file and click "Edit Video".</div>
+      <div class="stats" id="video-stats">
+        <span class="pill" id="video-stat-upload">Upload: -</span>
+        <span class="pill" id="video-stat-frames">Frames: -</span>
+        <span class="pill" id="video-stat-fps">Source FPS: -</span>
+        <span class="pill" id="video-stat-wall">Wall: -</span>
+        <span class="pill" id="video-stat-avg">Avg/frame: -</span>
+      </div>
+    </section>
+
+    <section class="card viewer" id="video-viewer">
+      <div class="panel">
+        <video id="video-input-preview" controls playsinline muted></video>
+        <div class="tag">Source</div>
+      </div>
+      <div class="panel">
+        <video id="video-output-preview" controls playsinline></video>
+        <div class="tag">Edited (MP4) — <a id="video-download-link" href="#" download style="color: var(--accent);">download</a></div>
+      </div>
+    </section>
   </main>
 
   <canvas id="capture-canvas" width="512" height="512" class="hidden"></canvas>
@@ -449,6 +486,170 @@
       }
     }
     fetchGPUInfo();
+
+    // -------------------- Video upload (POST /api/predict_video) --------------------
+    const videoPromptEl = document.getElementById("video-prompt");
+    const videoFileEl = document.getElementById("video-file");
+    const videoSeedEl = document.getElementById("video-seed");
+    const videoSubmitBtn = document.getElementById("video-submit-btn");
+    const videoCancelBtn = document.getElementById("video-cancel-btn");
+    const videoStatusEl = document.getElementById("video-status");
+    const videoStatUpload = document.getElementById("video-stat-upload");
+    const videoStatFrames = document.getElementById("video-stat-frames");
+    const videoStatFps = document.getElementById("video-stat-fps");
+    const videoStatWall = document.getElementById("video-stat-wall");
+    const videoStatAvg = document.getElementById("video-stat-avg");
+    const videoInputPreviewEl = document.getElementById("video-input-preview");
+    const videoOutputPreviewEl = document.getElementById("video-output-preview");
+    const videoDownloadLink = document.getElementById("video-download-link");
+
+    let videoXhr = null;
+    let lastInputPreviewURL = null;
+    let lastOutputBlobURL = null;
+
+    function setVideoStatus(text, isError = false) {
+      videoStatusEl.textContent = text;
+      videoStatusEl.classList.toggle("error", isError);
+    }
+
+    function resetVideoStats() {
+      videoStatUpload.textContent = "Upload: -";
+      videoStatFrames.textContent = "Frames: -";
+      videoStatFps.textContent = "Source FPS: -";
+      videoStatWall.textContent = "Wall: -";
+      videoStatAvg.textContent = "Avg/frame: -";
+    }
+
+    function revokeURL(url) {
+      if (url) {
+        try { URL.revokeObjectURL(url); } catch (_) { /* noop */ }
+      }
+    }
+
+    videoFileEl.addEventListener("change", () => {
+      const file = videoFileEl.files && videoFileEl.files[0];
+      revokeURL(lastInputPreviewURL);
+      lastInputPreviewURL = null;
+      if (file) {
+        lastInputPreviewURL = URL.createObjectURL(file);
+        videoInputPreviewEl.src = lastInputPreviewURL;
+        setVideoStatus(`Selected: ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MiB)`);
+      } else {
+        videoInputPreviewEl.removeAttribute("src");
+        setVideoStatus("Pick a video file and click \"Edit Video\".");
+      }
+    });
+
+    videoSubmitBtn.addEventListener("click", () => {
+      const file = videoFileEl.files && videoFileEl.files[0];
+      if (!file) {
+        setVideoStatus("Please choose a video file first.", true);
+        return;
+      }
+      if (videoXhr) {
+        setVideoStatus("A video job is already running.", true);
+        return;
+      }
+
+      const prompt = (videoPromptEl.value || "").trim();
+      const seedRaw = Number(videoSeedEl.value);
+      const seed = Number.isFinite(seedRaw) ? Math.trunc(seedRaw) : 0;
+
+      const form = new FormData();
+      form.append("video", file, file.name);
+      form.append("prompt", prompt);
+      form.append("seed", String(seed));
+
+      const xhr = new XMLHttpRequest();
+      videoXhr = xhr;
+      xhr.open("POST", "/api/predict_video", true);
+      xhr.responseType = "blob";
+
+      xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable) {
+          const pct = (evt.loaded / evt.total) * 100;
+          videoStatUpload.textContent = `Upload: ${pct.toFixed(1)}%`;
+        }
+      };
+      xhr.upload.onload = () => {
+        videoStatUpload.textContent = "Upload: done";
+        setVideoStatus("Upload complete. Server is editing frames... (this may take a while)");
+      };
+
+      xhr.onload = () => {
+        videoXhr = null;
+        videoSubmitBtn.disabled = false;
+        videoCancelBtn.disabled = true;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const blob = xhr.response;
+          revokeURL(lastOutputBlobURL);
+          lastOutputBlobURL = URL.createObjectURL(blob);
+          videoOutputPreviewEl.src = lastOutputBlobURL;
+          videoDownloadLink.href = lastOutputBlobURL;
+          const baseName = (file.name || "edited").replace(/\.[^.]+$/, "");
+          videoDownloadLink.download = `${baseName}_flux.mp4`;
+
+          const frames = xhr.getResponseHeader("x-flux-frame-count");
+          const fps = xhr.getResponseHeader("x-flux-src-fps");
+          const wall = xhr.getResponseHeader("x-flux-wall-seconds");
+          const avg = xhr.getResponseHeader("x-flux-avg-frame-total-ms");
+          if (frames) videoStatFrames.textContent = `Frames: ${frames}`;
+          if (fps) videoStatFps.textContent = `Source FPS: ${Number(fps).toFixed(2)}`;
+          if (wall) videoStatWall.textContent = `Wall: ${Number(wall).toFixed(1)} s`;
+          if (avg) videoStatAvg.textContent = `Avg/frame: ${Number(avg).toFixed(0)} ms`;
+
+          setVideoStatus(`Done. ${frames || "?"} frames edited.`);
+        } else {
+          // Try to parse JSON error message from blob.
+          const reader = new FileReader();
+          reader.onload = () => {
+            let detail = `HTTP ${xhr.status}`;
+            try {
+              const j = JSON.parse(String(reader.result || ""));
+              if (j && j.detail) detail = `HTTP ${xhr.status}: ${j.detail}`;
+            } catch (_) { /* noop */ }
+            setVideoStatus(detail, true);
+          };
+          reader.onerror = () => setVideoStatus(`HTTP ${xhr.status}`, true);
+          reader.readAsText(xhr.response);
+        }
+      };
+
+      xhr.onerror = () => {
+        videoXhr = null;
+        videoSubmitBtn.disabled = false;
+        videoCancelBtn.disabled = true;
+        setVideoStatus("Network error while uploading or processing.", true);
+      };
+
+      xhr.onabort = () => {
+        videoXhr = null;
+        videoSubmitBtn.disabled = false;
+        videoCancelBtn.disabled = true;
+        setVideoStatus("Cancelled.", true);
+      };
+
+      resetVideoStats();
+      videoStatUpload.textContent = "Upload: 0%";
+      videoSubmitBtn.disabled = true;
+      videoCancelBtn.disabled = false;
+      setVideoStatus("Uploading...");
+      xhr.send(form);
+    });
+
+    videoCancelBtn.addEventListener("click", () => {
+      if (videoXhr) {
+        videoXhr.abort();
+      }
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (videoXhr) {
+        try { videoXhr.abort(); } catch (_) { /* noop */ }
+      }
+      revokeURL(lastInputPreviewURL);
+      revokeURL(lastOutputBlobURL);
+    });
   </script>
 </body>
 </html>

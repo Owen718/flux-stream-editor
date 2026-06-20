@@ -78,15 +78,16 @@ class FastFlux2Config:
     gpu_id: int = 0
     dtype: str = "bfloat16"
     attention_backend: str = "auto"
-    width: int = 512
-    height: int = 512
-    num_inference_steps: int = 2
+    # Defaults target HD (1280x720) single-shot quality, not realtime throughput.
+    width: int = 1280
+    height: int = 720
+    num_inference_steps: int = 28
     guidance_scale: float = 1.0
     seed: int = 0
 
-    # Fastest benchmarked stack from this workspace:
-    # DBCache + steps_mask=10 + TaylorSeer + compile + triton.cudagraphs=False.
-    enable_cache_dit: bool = True
+    # Non-realtime defaults: keep cache/compile/taylorseer OFF for max fidelity
+    # and to avoid the realtime-specific steps_mask length constraint.
+    enable_cache_dit: bool = False
     cache_fn: int = 1
     cache_bn: int = 0
     residual_diff_threshold: float = 0.8
@@ -96,28 +97,32 @@ class FastFlux2Config:
     cache_max_cached_steps: int = -1
     cache_max_continuous_cached_steps: int = -1
     cache_enable_separate_cfg: bool = False
-    steps_mask: str = "10"
+    # steps_mask is only consumed when enable_cache_dit=True. Leave empty here so
+    # users who flip cache back on must explicitly provide a mask of the right length.
+    steps_mask: str = ""
     steps_computation_policy: str = "dynamic"
-    enable_taylorseer: bool = True
+    enable_taylorseer: bool = False
     taylorseer_order: int = 1
 
-    compile_transformer: bool = True
+    compile_transformer: bool = False
     compile_disable_cudagraphs: bool = True
-    input_resize_mode: str = "equivalent_area"  # "equivalent_area" keeps aspect ratio with ~512x512 pixel area.
+    # "equivalent_area" keeps aspect ratio and rescales source to ~width*height pixels.
+    input_resize_mode: str = "equivalent_area"
     preprocess_fast_tensor: bool = True
     preprocess_resample: str = "bilinear"
     preprocess_pin_memory: bool = True
     preprocess_non_blocking_h2d: bool = True
-    cache_timesteps: bool = True
-    cache_image_latent_ids: bool = True
-    enable_vae_encoder_compile: bool = True
+    cache_timesteps: bool = False
+    cache_image_latent_ids: bool = False
+    enable_vae_encoder_compile: bool = False
     vae_encoder_compile_mode: str = "reduce-overhead"
     vae_encoder_compile_disable_cudagraphs: bool = True
-    enable_vae_decoder_compile: bool = True
+    enable_vae_decoder_compile: bool = False
     vae_decoder_compile_mode: str = "reduce-overhead"
     vae_decoder_compile_disable_cudagraphs: bool = True
     vae_decoder_channels_last: bool = False
     vae_decoder_input_channels_last: bool = False
+    # TAEF2 is a tiny VAE optimized for realtime; full VAE gives better HD quality.
     enable_taef2: bool = False
     taef2_cache_dir: str = ".cache/taef2"
     taef2_taesd_py_path: str = ""

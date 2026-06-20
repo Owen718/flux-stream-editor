@@ -139,15 +139,29 @@ class RealtimeTxt2ImgApi:
         self.app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="frontend")
 
 
-def build_default_config(attention_backend: str = "auto") -> FastFlux2Config:
+def build_default_config(
+    attention_backend: str = "auto",
+    num_inference_steps: int = 28,
+    width: int = 1280,
+    height: int = 720,
+) -> FastFlux2Config:
+    """Build a non-realtime HD config.
+
+    Cache/compile/TaylorSeer/TAEF2 are OFF by default for max fidelity. Flip
+    them back on via env vars if you want to trade quality for throughput.
+    """
     attention_backend = normalize_attention_backend_name(attention_backend)
     profile_stage_timing = os.getenv("FLUX_PROFILE_STAGE", "0") == "1"
-    enable_vae_decoder_compile = _env_bool("FLUX_VAE_DECODE_COMPILE", True)
-    vae_decoder_compile_disable_cudagraphs = _env_bool("FLUX_VAE_DECODE_DISABLE_CUDAGRAPHS", False)
+
+    enable_cache_dit = _env_bool("FLUX_ENABLE_CACHE_DIT", False)
+    enable_taylorseer = _env_bool("FLUX_ENABLE_TAYLORSEER", False)
+    compile_transformer = _env_bool("FLUX_COMPILE_TRANSFORMER", False)
+    enable_vae_decoder_compile = _env_bool("FLUX_VAE_DECODE_COMPILE", False)
+    vae_decoder_compile_disable_cudagraphs = _env_bool("FLUX_VAE_DECODE_DISABLE_CUDAGRAPHS", True)
     vae_decoder_channels_last = _env_bool("FLUX_VAE_DECODE_CHANNELS_LAST", False)
     vae_decoder_input_channels_last = _env_bool("FLUX_VAE_DECODE_INPUT_CHANNELS_LAST", False)
     vae_decoder_compile_mode = os.getenv("FLUX_VAE_DECODE_COMPILE_MODE", "reduce-overhead").strip() or "reduce-overhead"
-    enable_vae_encoder_compile = _env_bool("FLUX_VAE_ENCODE_COMPILE", True)
+    enable_vae_encoder_compile = _env_bool("FLUX_VAE_ENCODE_COMPILE", False)
     vae_encoder_compile_disable_cudagraphs = _env_bool("FLUX_VAE_ENCODE_DISABLE_CUDAGRAPHS", True)
     vae_encoder_compile_mode = os.getenv("FLUX_VAE_ENCODE_COMPILE_MODE", "reduce-overhead").strip() or "reduce-overhead"
     enable_taef2 = _env_bool("FLUX_USE_TAEF2", False)
@@ -155,25 +169,28 @@ def build_default_config(attention_backend: str = "auto") -> FastFlux2Config:
     taef2_cache_dir = os.getenv("FLUX_TAEF2_CACHE_DIR", ".cache/taef2").strip() or ".cache/taef2"
     taef2_taesd_py_path = os.getenv("FLUX_TAEF2_SCRIPT_PATH", "").strip()
     taef2_weight_path = os.getenv("FLUX_TAEF2_WEIGHT_PATH", "").strip()
-    cache_timesteps = _env_bool("FLUX_CACHE_TIMESTEPS", True)
-    cache_image_latent_ids = _env_bool("FLUX_CACHE_IMAGE_LATENT_IDS", True)
+    cache_timesteps = _env_bool("FLUX_CACHE_TIMESTEPS", False)
+    cache_image_latent_ids = _env_bool("FLUX_CACHE_IMAGE_LATENT_IDS", False)
+
+    steps_mask = "1" * int(num_inference_steps) if enable_cache_dit else ""
+
     return FastFlux2Config(
         attention_backend=attention_backend,
-        width=512,
-        height=512,
+        width=int(width),
+        height=int(height),
         input_resize_mode="equivalent_area",
-        num_inference_steps=2,
+        num_inference_steps=int(num_inference_steps),
         guidance_scale=1.0,
         seed=0,
-        enable_cache_dit=True,
+        enable_cache_dit=enable_cache_dit,
         cache_fn=1,
         cache_bn=0,
         residual_diff_threshold=0.8,
-        steps_mask="10",
+        steps_mask=steps_mask,
         steps_computation_policy="dynamic",
-        enable_taylorseer=True,
+        enable_taylorseer=enable_taylorseer,
         taylorseer_order=1,
-        compile_transformer=True,
+        compile_transformer=compile_transformer,
         compile_disable_cudagraphs=True,
         cache_timesteps=cache_timesteps,
         cache_image_latent_ids=cache_image_latent_ids,
@@ -195,7 +212,7 @@ def build_default_config(attention_backend: str = "auto") -> FastFlux2Config:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Realtime txt2img demo for FLUX.2 with fast config.")
+    parser = argparse.ArgumentParser(description="Txt2img demo for FLUX.2 (HD, non-realtime).")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--workers", type=int, default=1)
@@ -204,9 +221,22 @@ def main() -> None:
         choices=ATTENTION_BACKEND_CHOICES,
         default="auto",
     )
+    parser.add_argument("--num-inference-steps", type=int, default=28)
+    parser.add_argument("--width", type=int, default=1280)
+    parser.add_argument("--height", type=int, default=720)
     args = parser.parse_args()
 
-    api = RealtimeTxt2ImgApi(build_default_config(attention_backend=args.attention_backend))
+    if args.num_inference_steps < 1:
+        raise ValueError("--num-inference-steps must be >= 1")
+
+    api = RealtimeTxt2ImgApi(
+        build_default_config(
+            attention_backend=args.attention_backend,
+            num_inference_steps=args.num_inference_steps,
+            width=args.width,
+            height=args.height,
+        )
+    )
 
     uvicorn.run(
         api.app,
